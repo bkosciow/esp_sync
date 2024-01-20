@@ -30,9 +30,10 @@ run example:
 Use any IDE you want, it just sync files.
 
 esp_sync.py -p <port> -d <work dir> -a <action>
-<port>: COM port
-<action>:
 
+<port>: COM port
+
+<action>:
       filelist - print files on device
       get - download all files from device
       cache - updates local cache
