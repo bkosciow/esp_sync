@@ -1,0 +1,6 @@
+*
+!.gitignore
+!.espignore
+!esp_sync.py
+!LICENSE
+!readme.rst
