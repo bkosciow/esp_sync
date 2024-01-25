@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 ACTION = None
 PORT = None
 DIR = None
+FILE = None
 
 
 def console_help():
@@ -50,6 +51,7 @@ def console_help():
           ' get - download all files from device \n'
           ' cache - updates local cache \n'
           ' run - default, start listeners\n'
+          ' delete - seletes file from remote, works with -fFilename\n'
           )
     print('<dir>: \n absolute path or . for current dir or nothing for current dir')
     print("\n\nonly <port> is required")
@@ -152,12 +154,19 @@ class EspOutput(Thread):
     def run(self):
         self.serial = serial.Serial(self.port, self.baudrate, parity=self.parity, rtscts=False, xonxoff=False)
         # self.serial.write(b'\x04')
+        # self.serial.write(b'\x03')
         logger.debug("listening")
+        self.serial.write(b'\x02')
         while self.work:
             line = str(self.serial.readline().decode("utf8"))
             print(line.rstrip())
 
     def stop(self):
+        self.serial.write(b'\x03')
+        # self.serial.write(b'\x01')
+        self.serial.write(b'\x01')
+
+        time.sleep(1)
         self.work = False
         if self.serial:
             self.serial.close()
@@ -172,6 +181,7 @@ class EspFile:
     def connect_board(self):
         if self.board is None:
             self.board = Pyboard(self.port)
+            self.reset()
 
     def disconnect_board(self):
         if self.board:
@@ -187,6 +197,7 @@ class EspFile:
         # self.board.serial.write(b'\x04')
 
     def get_file(self, remote_filename):
+        self.reset()
         files = Files(self.board)
         contents = files.get(remote_filename)
         local_filename = self.local_path + os.sep + remote_filename
@@ -202,6 +213,7 @@ class EspFile:
         logger.debug("-> DONE")
 
     def get_file_list(self, path="/"):
+        self.reset()
         ret = []
         files = Files(self.board)
         for file in files.ls(path, True, True):
@@ -209,7 +221,14 @@ class EspFile:
 
         return ret
 
+    def reset(self):
+        self.board.serial.write(b'\x03')
+        time.sleep(0.5)
+        self.board.serial.write(b'\x01')
+        time.sleep(0.5)
+
     def put_file(self, local_filename):
+        self.reset()
         files = Files(self.board)
         localfp = self.local_path + local_filename
 
@@ -231,6 +250,7 @@ class EspFile:
         logger.debug("-> DONE")
 
     def remove_file(self, remote_filename):
+        self.reset()
         files = Files(self.board)
         logger.debug("-> Deleting remote file: %s" % (remote_filename))
         files.rm(remote_filename)
@@ -238,7 +258,7 @@ class EspFile:
 
 if __name__ == '__main__':
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hp:d:a:", ["port=", "dir=", "action="])
+        opts, args = getopt.getopt(sys.argv[1:], "hp:d:a:f:", ["port=", "dir=", "action=", "file="])
     except getopt.GetoptError:
         console_help()
         sys.exit(2)
@@ -252,6 +272,8 @@ if __name__ == '__main__':
             DIR = arg
         elif opt in ("-a", "--action"):
             ACTION = arg
+        elif opt in ("-f", "--file"):
+            FILE = arg
 
     if not ACTION:
         ACTION = "run"
@@ -272,6 +294,11 @@ if __name__ == '__main__':
         files = esp.get_file_list()
         for file in files:
             print(file)
+    if ACTION == "delete":
+        logger.info("Removing %s " % FILE)
+        esp = EspFile(PORT, DIR)
+        esp.connect_board()
+        esp.remove_file(FILE)
 
     if ACTION == "get":
         esp = EspFile(PORT, DIR)
