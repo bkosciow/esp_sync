@@ -1,13 +1,16 @@
 esp_sync
 
 Script (dirty) to track local file changes in dir and uploads files to the device with micropython
-tracks only *.py. one level of dirs
+tracks files and one level of dirs. On windows parse lnk files.
 
 read more: https://koscis.wordpress.com/2024/01/20/esp_sync/
 
 requires: pip install adafruit-ampy
+(on windows additionally: pip install LnkParse3 )
 
 .espignore - patterns to ignore
+
+(build in ignore: ['.git', '.gitignore', '.espcache', '.espignore', 'LICENSE', 'readme.rst', 'readme.txt', 'readme.md', 'venv', '.idea'] )
 
 .espcache - cache with local files, name, size and last modification time
 

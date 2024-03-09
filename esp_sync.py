@@ -11,11 +11,13 @@ import serial.tools.miniterm
 import pathlib
 import logging
 
-#pip install adafruit-ampy
-#https://github.com/scientifichackers/ampy/blob/master/ampy/cli.py
+# pip install adafruit-ampy
+# https://github.com/scientifichackers/ampy/blob/master/ampy/cli.py
+
+# windows: pip install LnkParse3
 
 # Script (dirty) to track local file changes in dir and uploads files to the device with micropython
-# tracks only *.py
+# tracks all files. follows windows lnk (directory)
 # one level of dirs
 #
 # .espignore - patterns to ignore
@@ -32,7 +34,7 @@ import logging
 
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -41,6 +43,12 @@ ACTION = None
 PORT = None
 DIR = None
 FILE = None
+LNK = False
+STATIC_IGNORE = ['.git', '.gitignore', '.espcache', '.espignore', 'LICENSE', 'readme.rst', 'readme.txt', 'readme.md', 'venv', '.idea']
+
+if os.name == "nt":
+    import LnkParse3
+    LNK = True
 
 
 def console_help():
@@ -51,23 +59,27 @@ def console_help():
           ' get - download all files from device \n'
           ' cache - updates local cache \n'
           ' run - default, start listeners\n'
-          ' delete - seletes file from remote, works with -fFilename\n'
+          ' delete - deletes file from remote, works with -fFilename\n'
           )
     print('<dir>: \n absolute path or . for current dir or nothing for current dir')
     print("\n\nonly <port> is required")
 
 
 class ProjectFile:
-    def __init__(self, name, changed, size):
+    def __init__(self, name, changed, size, dir):
         self.name = name
         self.changed = changed
         self.size = size
+        self.dir = dir
 
     def __str__(self):
-        return self.name + " : " + str(self.changed) + " : " + str(self.size)
+        return self.name + " : " + str(self.changed) + " : " + str(self.size) + " : " + str(self.dir)
 
     def __eq__(self, other):
         return self.name == other.name and self.changed == other.changed and self.size == other.size
+
+    def get_target(self):
+        return self.dir
 
 
 class FileWatcher:
@@ -87,7 +99,7 @@ class FileWatcher:
                 lines = [line.strip().split(" : ") for line in file]
             for line in lines:
                 if len(line) > 1:
-                    self.cached_files[line[0]] = ProjectFile(line[0],   float(line[1]), int(line[2]))
+                    self.cached_files[line[0]] = ProjectFile(line[0], float(line[1]), int(line[2]), line[3])
 
     def save_cachefile(self):
         espcache = self.local_path + os.sep + self.cachefile
@@ -104,19 +116,33 @@ class FileWatcher:
         if os.path.isfile(espignore):
             with open(espignore) as file:
                 self.ignore = [line.rstrip() for line in file]
+        self.ignore.extend(STATIC_IGNORE)
 
-    def strip_path(self, path):
-        return path.replace(self.local_path, "")
+    def _get_files(self, path, base_dir=""):
+        project_files = {}
+        for item in path.rglob("*"):
+            if set(item.parts).isdisjoint(self.ignore):
+                if str(item).endswith(".lnk") and LNK:
+                    with open(str(item), 'rb') as indata:
+                        lnk = LnkParse3.lnk_file(indata)
+                        subdir = lnk.get_json()['link_info']['local_base_path']
+                        dir = str(item).replace(str(path.resolve()), "")
+                        dir = dir.replace("\\", "/")
+                        a = self._get_files(pathlib.Path(subdir), base_dir + dir[:-4])
+                        project_files.update(a)
+                else:
+                    if os.path.isfile(item):
+                        name = str(item)
+                        dir = str(item).replace(str(path.resolve()), "")
+                        dir = dir.replace("\\", "/")
+                        dir = base_dir + dir
+                        project_files[name] = ProjectFile(name, item.lstat().st_mtime, item.lstat().st_size, dir)
+
+        return project_files
 
     def get_files(self):
         p = pathlib.Path(self.local_path)
-        project_files = {}
-        for item in p.rglob("*.py"):
-            if set(item.parts).isdisjoint(self.ignore):
-                name = self.strip_path(str(item)).lstrip("\\").lstrip("/")
-                project_files[name] = ProjectFile(name, item.lstat().st_mtime, item.lstat().st_size)
-
-        return project_files
+        return self._get_files(p)
 
     def get_cached_files(self):
         return self.cached_files
@@ -133,7 +159,7 @@ class FileWatcher:
         project_files = self.get_files()
         cache = self.get_cached_files()
         for file_name in project_files:
-            file_name = self.strip_path(file_name).lstrip("\\")
+            file_name = file_name.lstrip("\\")
             if file_name not in cache or cache[file_name] != project_files[file_name]:
                 diff.append(project_files[file_name])
 
@@ -227,15 +253,12 @@ class EspFile:
         self.board.serial.write(b'\x01')
         time.sleep(0.5)
 
-    def put_file(self, local_filename):
+    def put_file(self, local_filename, remote_filename):
         self.reset()
         files = Files(self.board)
-        localfp = self.local_path + local_filename
 
-        remote = local_filename
-        remote = remote.lstrip("\\")
-        logger.debug("-> Copy from local, %s to %s" % (local_filename, remote))
-        remote_dir = os.path.dirname(remote)
+        logger.debug("-> Copy from local, %s to %s" % (local_filename, remote_filename))
+        remote_dir = os.path.dirname(remote_filename)
         remote_dir = remote_dir.lstrip("\\")
         if remote_dir:
             try:
@@ -244,9 +267,9 @@ class EspFile:
             except DirectoryExistsError:
                 pass
 
-        with open(localfp, "rb") as local:
+        with open(local_filename, "rb") as local:
             data = local.read()
-            files.put(remote.replace("\\", "/"), data)
+            files.put(remote_filename.replace("\\", "/"), data)
         logger.debug("-> DONE")
 
     def remove_file(self, remote_filename):
@@ -337,8 +360,9 @@ if __name__ == '__main__':
                     esp.connect_board()
                     for file in project_files:
                         logger.info("[Uploading : %s ]" % file)
-                        esp.put_file(file.name)
+                        esp.put_file(file.name, file.get_target())
                     esp.disconnect_board()
+                    logger.info("[Upload OK]")
                     logger.debug("[Starting debuger]")
 
                 if output is None:
@@ -348,6 +372,6 @@ if __name__ == '__main__':
                 time.sleep(2)
                 cnt += 1
         except KeyboardInterrupt:
-            print("[Stopping debuger]")
+            logger.info("[Stopping debuger]")
             if output:
                 output.stop()

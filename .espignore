@@ -1,4 +1,11 @@
+.git
 esp_sync.py
 venv
 boot.py
-
+.espcache
+.espignore
+.gitignore
+.idea
+config.py.dist
+node_config.py.dist
+readme.txt
